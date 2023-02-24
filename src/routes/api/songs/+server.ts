@@ -1,41 +1,39 @@
 import type { RequestEvent } from '@sveltejs/kit';
 import fs from 'fs';
+import { gzipSync } from 'zlib';
 
 export async function GET({ url }: RequestEvent) {
-	const songUrl = url.searchParams.get('url') ?? '';
+	const songUrl = decodeURIComponent(url.searchParams.get('url') ?? '');
+	const noCache = url.searchParams.get('noCache') ?? false;
+
 	const internalSongName = Buffer.from(songUrl, 'ascii').toString('base64url');
-	const songPath = './tmp/' + internalSongName + '.mp3';
+	const songPath = './tmp/' + internalSongName + '.gz';
 
-	if (fs.existsSync(songPath)) {
-		// Serve song from internal cache
-		const blob = fs.readFileSync(songPath);
+	let buffer: Buffer;
 
-		console.log('Serving mp3 from cache');
-
-		const response = new Response(blob);
-		response.headers.append('cache-control', 'public, max-age=31536000');
-		return response;
+	if (fs.existsSync(songPath) && !noCache) {
+		buffer = fs.readFileSync(songPath);
 	} else {
-		// Request song and save it.
+		const songData = await fetch(songUrl).then((res) => res.arrayBuffer());
+		buffer = gzipSync(songData);
 
-		const songData = await fetch(songUrl);
-		const blob = await songData.blob();
-		const buffer = Buffer.from(await blob.arrayBuffer());
-
-		if (!fs.existsSync('./tmp')) {
-			fs.mkdirSync('./tmp');
-		}
-
-		console.log('Saving mp3 into cache', songPath);
-
-		fs.writeFile(songPath, buffer, (err) => {
-			if (err) {
-				console.log('Could not save mp3', err);
-			}
-		});
-
-		const response = new Response(blob);
-		response.headers.append('cache-control', 'public, max-age=31536000');
-		return response;
+		saveSong(buffer, songPath);
 	}
+
+	return new Response(buffer, {
+		headers: {
+			'cache-control': 'public, max-age=31536000',
+			'content-encoding': 'gzip'
+		}
+	});
 }
+
+const saveSong = (buffer: Buffer, songPath: string) => {
+	if (!fs.existsSync('./tmp')) {
+		fs.mkdirSync('./tmp');
+	}
+
+	console.info('Saving mp3 into cache', songPath);
+
+	fs.writeFileSync(songPath, buffer);
+};
